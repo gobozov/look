@@ -60,7 +60,7 @@ def render(current_path, entries, selection, scroll, height, width):
     
     # Colors
     BLUE_BG = "\033[44m\033[37m"
-    CYAN = "\033[36m"
+    BLUE = "\033[34m"
     YELLOW = "\033[33m"
     RESET = "\033[0m"
     CLEAR_LINE = "\033[K"
@@ -83,7 +83,7 @@ def render(current_path, entries, selection, scroll, height, width):
             if idx == selection:
                 output.append(f"{BLUE_BG}{line[:width]}{RESET}{CLEAR_LINE}")
             else:
-                color = CYAN if item.get('is_dir') else ""
+                color = BLUE if item.get('is_dir') else ""
                 output.append(f"{color}{line[:width]}{RESET}{CLEAR_LINE}")
         else:
             output.append(CLEAR_LINE) # Empty space if directory is small
@@ -129,6 +129,10 @@ def main():
                 if selection > 0: selection -= 1
             elif key == '\x1b[B': # Down
                 if selection < len(entries) - 1: selection += 1
+            elif key == '\x1b[D': # Left
+                selection = 0
+            elif key == '\x1b[C': # Right
+                selection = len(entries) - 1
             elif key == '\x1b[5~': # Page Up
                 selection = max(0, selection - view_height)
             elif key == '\x1b[6~': # Page Down
