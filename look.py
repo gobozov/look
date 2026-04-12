@@ -5,6 +5,7 @@ import stat
 import pwd
 import tty
 import termios
+import select
 from datetime import datetime
 
 # --- Logic: Metadata & Files ---
@@ -41,21 +42,24 @@ def get_file_info(path):
 # --- UI: ANSI Rendering ---
 
 def get_key():
-    """Reads a single keypress, including multi-byte arrow keys."""
+    """Reads a single keypress, including multi-byte escape sequences like arrows and Page Up/Down."""
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == '\x1b': # Escape sequence
-            ch += sys.stdin.read(2)
-            if ch.endswith('['): # Further sequences (like PageUp)
-                ch += sys.stdin.read(1)
+        # Read the first byte (blocks until a key is pressed)
+        ch = os.read(fd, 1).decode('utf-8', errors='ignore')
+        if ch == '\x1b':
+            # Use a short timeout to see if more characters follow (for arrow keys, etc.)
+            dr, dw, de = select.select([fd], [], [], 0.05)
+            if dr:
+                # Read the rest of the sequence (up to 6 more bytes)
+                ch += os.read(fd, 6).decode('utf-8', errors='ignore')
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
-def render(current_path, entries, selection, scroll, height, width):
+def render(current_path, entries, selection, scroll, height, width, prompt=None, input_text=""):
     output = []
     
     # Colors
@@ -88,9 +92,22 @@ def render(current_path, entries, selection, scroll, height, width):
         else:
             output.append(CLEAR_LINE) # Empty space if directory is small
 
+    # Overlay Dialog if prompt is active
+    if prompt:
+        dialog_w = min(40, width - 4)
+        dialog_h = 3
+        start_y = (height - dialog_h) // 2 + 1
+        start_x = (width - dialog_w) // 2
+        
+        # Draw dialog over the file list
+        output[start_y] = f"{' ' * start_x}┌{'─' * (dialog_w - 2)}┐{CLEAR_LINE}"
+        output[start_y + 1] = f"{' ' * start_x}│ {prompt[:dialog_w-4].ljust(dialog_w-4)} │{CLEAR_LINE}"
+        output[start_y + 2] = f"{' ' * start_x}│ > {input_text[:dialog_w-6].ljust(dialog_w-6)} │{CLEAR_LINE}"
+        output[start_y + 3] = f"{' ' * start_x}└{'─' * (dialog_w - 2)}┘{CLEAR_LINE}"
+
     # Border: Bottom
     remaining = len(entries) - (scroll + height)
-    bot_label = " [ 'q': quit ] "
+    bot_label = " [ ^N: file | ^D: folder | PgUp/PgDn: scroll | 'q': quit ] "
     if remaining > 0: bot_label = f" [ ↓ {remaining} more ]" + bot_label
     output.append(f"{YELLOW}─ {bot_label}{'─' * (width - len(bot_label) - 2)}{RESET}{CLEAR_LINE}")
 
@@ -104,6 +121,8 @@ def main():
     current_path = os.getcwd()
     selection = 0
     scroll = 0
+    input_type = None # None, "file", or "folder"
+    input_text = ""
     
     # Hide cursor
     sys.stdout.write("\033[?25l")
@@ -118,13 +137,44 @@ def main():
             if view_height < 1: view_height = 5
 
             entries = get_file_info(current_path)
-            render(current_path, entries, selection, scroll, view_height, cols)
+            prompt = None
+            if input_type == "file": prompt = "Create New File:"
+            elif input_type == "folder": prompt = "Create New Folder:"
+            
+            render(current_path, entries, selection, scroll, view_height, cols, 
+                   prompt=prompt, input_text=input_text)
 
             key = get_key()
+            
+            if input_type:
+                if key in ['\r', '\n']:
+                    if input_text:
+                        full_path = os.path.join(current_path, input_text)
+                        if input_type == "file":
+                            with open(full_path, 'w') as f: pass
+                        elif input_type == "folder":
+                            os.makedirs(full_path, exist_ok=True)
+                    input_type = None
+                    input_text = ""
+                elif key == '\x1b': # Escape
+                    input_type = None
+                    input_text = ""
+                elif key in ['\x7f', '\x08']: # Backspace
+                    input_text = input_text[:-1]
+                elif len(key) == 1 and ord(key) >= 32:
+                    input_text += key
+                continue
+
             if key == 'q':
                 # Move cursor to the bottom of the widget before exiting
                 sys.stdout.write(f"\033[{view_height + 2}B\n")
                 break
+            elif key == '\x0e': # Ctrl+N
+                input_type = "file"
+                input_text = ""
+            elif key == '\x04': # Ctrl+D (Directory)
+                input_type = "folder"
+                input_text = ""
             elif key == '\x1b[A': # Up
                 if selection > 0: selection -= 1
             elif key == '\x1b[B': # Down
