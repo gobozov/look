@@ -33,9 +33,11 @@ lk
 
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` | Move selection |
-| `←` / `→` | Jump to top / bottom of directory |
-| `PgUp` / `PgDn` | Scroll through long lists |
+| `↑` / `↓` | Move selection (or `j` / `k`) |
+| `←` / `→` | Jump to top / bottom of directory (or `g` / `G`) |
+| `Space` / `d` | **Page Down** (Reliable on macOS) |
+| `b` / `u` | **Page Up** (Reliable on macOS) |
+| `PgUp` / `PgDn` | Standard Scroll (may be intercepted by some terminals) |
 | `Enter` | Navigate into the selected directory |
 | `Ctrl+N` | **New File**: Open dialog to create a file |
 | `Ctrl+D` | **New Folder**: Open dialog to create a directory |

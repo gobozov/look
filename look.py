@@ -50,11 +50,11 @@ def get_key():
         # Read the first byte (blocks until a key is pressed)
         ch = os.read(fd, 1).decode('utf-8', errors='ignore')
         if ch == '\x1b':
-            # Use a short timeout to see if more characters follow (for arrow keys, etc.)
-            dr, dw, de = select.select([fd], [], [], 0.05)
+            # Use a slightly longer timeout to ensure we capture the full sequence on macOS
+            dr, dw, de = select.select([fd], [], [], 0.1)
             if dr:
-                # Read the rest of the sequence (up to 6 more bytes)
-                ch += os.read(fd, 6).decode('utf-8', errors='ignore')
+                # Read all available data in the buffer (up to 10 bytes)
+                ch += os.read(fd, 10).decode('utf-8', errors='ignore')
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
@@ -107,7 +107,7 @@ def render(current_path, entries, selection, scroll, height, width, prompt=None,
 
     # Border: Bottom
     remaining = len(entries) - (scroll + height)
-    bot_label = " [ ^N: file | ^D: folder | PgUp/PgDn: scroll | 'q': quit ] "
+    bot_label = " [ ^N: file | ^D: folder | Space: page | 'q': quit ] "
     if remaining > 0: bot_label = f" [ ↓ {remaining} more ]" + bot_label
     output.append(f"{YELLOW}─ {bot_label}{'─' * (width - len(bot_label) - 2)}{RESET}{CLEAR_LINE}")
 
@@ -124,8 +124,8 @@ def main():
     input_type = None # None, "file", or "folder"
     input_text = ""
     
-    # Hide cursor
-    sys.stdout.write("\033[?25l")
+    # Enter Application Cursor Mode and Hide cursor
+    sys.stdout.write("\033[?1h\033[?25l")
     sys.stdout.flush()
 
     try:
@@ -133,8 +133,9 @@ def main():
             # Get terminal dimensions
             rows, cols = os.popen('stty size', 'r').read().split()
             rows, cols = int(rows), int(cols)
+            # Use half the screen height
             view_height = (rows // 2) - 2
-            if view_height < 1: view_height = 5
+            if view_height < 5: view_height = 5
 
             entries = get_file_info(current_path)
             prompt = None
@@ -175,17 +176,17 @@ def main():
             elif key == '\x04': # Ctrl+D (Directory)
                 input_type = "folder"
                 input_text = ""
-            elif key == '\x1b[A': # Up
+            elif key in ['\x1b[A', '\x1bOA', 'k']: # Up
                 if selection > 0: selection -= 1
-            elif key == '\x1b[B': # Down
+            elif key in ['\x1b[B', '\x1bOB', 'j']: # Down
                 if selection < len(entries) - 1: selection += 1
-            elif key == '\x1b[D': # Left
+            elif key in ['\x1b[D', '\x1bOD', '\x1b[H', '\x1b[1~', 'g']: # Left / Home / g
                 selection = 0
-            elif key == '\x1b[C': # Right
+            elif key in ['\x1b[C', '\x1bOC', '\x1b[F', '\x1b[4~', 'G']: # Right / End / G
                 selection = len(entries) - 1
-            elif key == '\x1b[5~': # Page Up
+            elif key in ['\x1b[5~', '\x1b[5;2~', '\x1b[V', '\x02', 'u', 'b', '\x1b[1;2A', '\x1b[1;3A', '\x1b\x1b[A']: # Page Up variants
                 selection = max(0, selection - view_height)
-            elif key == '\x1b[6~': # Page Down
+            elif key in ['\x1b[6~', '\x1b[6;2~', '\x1b[U', '\x06', 'd', ' ', '\x1b[1;2B', '\x1b[1;3B', '\x1b\x1b[B']: # Page Down variants
                 selection = min(len(entries) - 1, selection + view_height)
             elif key in ['\r', '\n']: # Enter
                 item = entries[selection]
@@ -201,8 +202,8 @@ def main():
                 scroll = selection - view_height + 1
 
     finally:
-        # Show cursor again
-        sys.stdout.write("\033[?25h")
+        # Exit Application Cursor Mode and show cursor again
+        sys.stdout.write("\033[?1l\033[?25h")
         sys.stdout.flush()
 
 if __name__ == "__main__":
