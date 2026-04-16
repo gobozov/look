@@ -1,52 +1,69 @@
 #!/bin/bash
 
 # Look - Installation Script
-# This script installs 'look.py' as the 'lk' command on your system.
+# This script installs 'look.py' as the 'lk' command with CD-on-exit support.
 
-set -e # Exit immediately if a command fails
+set -e
 
 APP_NAME="lk"
+BINARY_NAME="lk-bin"
 SOURCE_FILE="look.py"
 INSTALL_DIR="/usr/local/bin"
-USER_INSTALL_DIR="$HOME/.local/bin"
 
-echo "🚀 Installing Look as '$APP_NAME'..."
+echo "🚀 Installing Look..."
 
-# 1. Check if source file exists
-if [ ! -f "$SOURCE_FILE" ]; then
-    echo "❌ Error: $SOURCE_FILE not found in the current directory."
-    exit 1
-fi
-
-# 2. Make the script executable
+# 1. Make the source executable
 chmod +x "$SOURCE_FILE"
 
-# 3. Determine installation path
+# 2. Install the binary
 if [ -w "$INSTALL_DIR" ]; then
-    # We have write access to /usr/local/bin
-    cp "$SOURCE_FILE" "$INSTALL_DIR/$APP_NAME"
-    echo "✅ Installed to $INSTALL_DIR/$APP_NAME"
-elif [ -d "$USER_INSTALL_DIR" ] && [ -w "$USER_INSTALL_DIR" ]; then
-    # We have write access to ~/.local/bin
-    cp "$SOURCE_FILE" "$USER_INSTALL_DIR/$APP_NAME"
-    echo "✅ Installed to $USER_INSTALL_DIR/$APP_NAME"
-    
-    # Check if ~/.local/bin is in PATH
-    if [[ ":$PATH:" != *":$USER_INSTALL_DIR:"* ]]; then
-        echo "⚠️  Note: $USER_INSTALL_DIR is not in your PATH. You may need to add it to your shell config (.bashrc/.zshrc)."
+    cp "$SOURCE_FILE" "$INSTALL_DIR/$BINARY_NAME"
+    echo "✅ Binary installed to $INSTALL_DIR/$BINARY_NAME"
+else
+    echo "🔒 Admin privileges required. Please enter password if prompted."
+    sudo cp "$SOURCE_FILE" "$INSTALL_DIR/$BINARY_NAME"
+    sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
+    echo "✅ Binary installed to $INSTALL_DIR/$BINARY_NAME using sudo"
+fi
+
+# 3. Create the shell wrapper function
+WRAPPER_FUNC="
+# Look - File Explorer Wrapper
+lk() {
+    $BINARY_NAME \"\$@\"
+    if [ -f /tmp/lk-cwd ]; then
+        cd \"\$(cat /tmp/lk-cwd)\"
+        rm /tmp/lk-cwd
+    fi
+}
+"
+
+# 4. Determine shell config file
+SHELL_CONFIG=""
+if [[ "$SHELL" == *"zsh"* ]]; then
+    SHELL_CONFIG="$HOME/.zshrc"
+elif [[ "$SHELL" == *"bash"* ]]; then
+    if [ -f "$HOME/.bash_profile" ]; then
+        SHELL_CONFIG="$HOME/.bash_profile"
+    else
+        SHELL_CONFIG="$HOME/.bashrc"
+    fi
+fi
+
+# 5. Add wrapper to config if it doesn't exist
+if [ -n "$SHELL_CONFIG" ]; then
+    if ! grep -q "lk()" "$SHELL_CONFIG"; then
+        echo "$WRAPPER_FUNC" >> "$SHELL_CONFIG"
+        echo "✅ Added shell wrapper to $SHELL_CONFIG"
+        echo "🔄 Please run 'source $SHELL_CONFIG' or restart your terminal."
+    else
+        echo "ℹ️  Shell wrapper already exists in $SHELL_CONFIG"
     fi
 else
-    # Fallback: Try with sudo
-    echo "🔒 Admin privileges required to install to $INSTALL_DIR. Please enter your password if prompted."
-    if sudo cp "$SOURCE_FILE" "$INSTALL_DIR/$APP_NAME"; then
-        sudo chmod +x "$INSTALL_DIR/$APP_NAME"
-        echo "✅ Installed to $INSTALL_DIR/$APP_NAME using sudo"
-    else
-        echo "❌ Installation failed. Please ensure you have the necessary permissions."
-        exit 1
-    fi
+    echo "⚠️  Could not detect your shell config file. Please manually add this to your .zshrc or .bashrc:"
+    echo "$WRAPPER_FUNC"
 fi
 
 echo ""
-echo "✨ Installation Complete! You can now run the app by typing: $APP_NAME"
-echo "📂 Use arrow keys to navigate and 'q' to quit."
+echo "✨ Installation Complete!"
+echo "👉 Use 'lk' to launch the explorer. It will now track your location on exit!"

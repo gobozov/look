@@ -270,6 +270,13 @@ def main():
                 scroll = selection - view_height + 1
 
     finally:
+        # Save final path for the shell wrapper
+        try:
+            with open("/tmp/lk-cwd", "w") as f:
+                f.write(current_path)
+        except:
+            pass
+            
         # Exit Alternate Screen and show cursor again
         sys.stdout.write("\033[?1049l\033[?1l\033[?25h")
         sys.stdout.flush()
