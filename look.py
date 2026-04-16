@@ -146,8 +146,11 @@ def main():
     selection_list = 0
     scroll_list = 0
     
-    # Enter Application Cursor Mode and Hide cursor
-    sys.stdout.write("\033[?1h\033[?25l")
+    # Memory for directory positions: { path: (selection, scroll) }
+    path_states = {}
+    
+    # Enter Alternate Screen Buffer and Hide cursor
+    sys.stdout.write("\033[?1049h\033[?1h\033[?25l")
     sys.stdout.flush()
 
     try:
@@ -155,8 +158,8 @@ def main():
             # Get terminal dimensions
             rows, cols = os.popen('stty size', 'r').read().split()
             rows, cols = int(rows), int(cols)
-            # Use half the screen height
-            view_height = (rows // 2) - 2
+            # Use full screen height
+            view_height = rows - 4
             if view_height < 5: view_height = 5
 
             if view_mode == "list":
@@ -202,8 +205,6 @@ def main():
                     scroll = scroll_list
                     continue
                 else:
-                    # Move cursor to the bottom of the widget before exiting
-                    sys.stdout.write(f"\033[{view_height + 2}B\n")
                     break
             elif key == '\x0e' and view_mode == "list": # Ctrl+N
                 input_type = "file"
@@ -227,9 +228,30 @@ def main():
                 if view_mode == "list":
                     item = entries[selection]
                     if item.get('is_dir'):
-                        current_path = os.path.abspath(os.path.join(current_path, item['name']))
-                        selection = 0
-                        scroll = 0
+                        # Save current state before leaving
+                        path_states[current_path] = (selection, scroll)
+                        
+                        old_dir = os.path.basename(current_path.rstrip(os.sep))
+                        new_path = os.path.abspath(os.path.join(current_path, item['name']))
+                        
+                        current_path = new_path
+                        if current_path in path_states:
+                            # Restore previous state for this directory
+                            selection, scroll = path_states[current_path]
+                        elif item['name'] == "..":
+                            # Moving up to a parent we haven't "saved" yet
+                            entries = get_file_info(current_path)
+                            selection = 0
+                            for idx, e in enumerate(entries):
+                                if e['name'].rstrip('/') == old_dir:
+                                    selection = idx
+                                    break
+                            # Place at the bottom of the screen as requested
+                            scroll = max(0, selection - view_height + 1)
+                        else:
+                            # Moving down to a new directory
+                            selection = 0
+                            scroll = 0
                     else:
                         # Save list state
                         entries_list = entries
@@ -248,8 +270,8 @@ def main():
                 scroll = selection - view_height + 1
 
     finally:
-        # Exit Application Cursor Mode and show cursor again
-        sys.stdout.write("\033[?1l\033[?25h")
+        # Exit Alternate Screen and show cursor again
+        sys.stdout.write("\033[?1049l\033[?1l\033[?25h")
         sys.stdout.flush()
 
 if __name__ == "__main__":
