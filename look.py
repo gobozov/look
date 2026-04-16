@@ -39,6 +39,13 @@ def get_file_info(path):
     except PermissionError:
         return [{"name": "..", "is_dir": True}, {"name": "!! PERMISSION DENIED !!", "is_dir": False}]
 
+def read_file_lines(path):
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read().splitlines()
+    except Exception as e:
+        return [f"!! ERROR READING FILE !!", str(e)]
+
 # --- UI: ANSI Rendering ---
 
 def get_key():
@@ -59,7 +66,7 @@ def get_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
-def render(current_path, entries, selection, scroll, height, width, prompt=None, input_text=""):
+def render(current_path, entries, selection, scroll, height, width, prompt=None, input_text="", view_mode="list"):
     output = []
     
     # Colors
@@ -74,23 +81,27 @@ def render(current_path, entries, selection, scroll, height, width, prompt=None,
     if scroll > 0: top_label += f" [ ↑ {scroll} more ] "
     output.append(f"{YELLOW}─ {top_label}{'─' * (width - len(top_label) - 2)}{RESET}{CLEAR_LINE}")
 
-    # File List
+    # File List / File Content
     for i in range(height):
         idx = i + scroll
         if idx < len(entries):
             item = entries[idx]
-            meta = f"{item.get('perms','')}  {item.get('author',''):>8}  {item.get('size',''):>8}  {item.get('ctime','')} | {item.get('mtime','')}"
-            name_w = width - len(meta) - 2
-            name = item['name'][:name_w].ljust(name_w)
+            if view_mode == "list":
+                meta = f"{item.get('perms','')}  {item.get('author',''):>8}  {item.get('size',''):>8}  {item.get('ctime','')} | {item.get('mtime','')}"
+                name_w = width - len(meta) - 2
+                name = item['name'][:name_w].ljust(name_w)
+                line = f"{name} {meta}"
+            else:
+                # view_mode == "view": entries contains raw lines
+                line = str(item)[:width].ljust(width)
             
-            line = f"{name} {meta}"
             if idx == selection:
                 output.append(f"{BLUE_BG}{line[:width]}{RESET}{CLEAR_LINE}")
             else:
-                color = BLUE if item.get('is_dir') else ""
+                color = BLUE if view_mode == "list" and item.get('is_dir') else ""
                 output.append(f"{color}{line[:width]}{RESET}{CLEAR_LINE}")
         else:
-            output.append(CLEAR_LINE) # Empty space if directory is small
+            output.append(CLEAR_LINE) # Empty space if directory/file is small
 
     # Overlay Dialog if prompt is active
     if prompt:
@@ -107,7 +118,11 @@ def render(current_path, entries, selection, scroll, height, width, prompt=None,
 
     # Border: Bottom
     remaining = len(entries) - (scroll + height)
-    bot_label = " [ ^N: file | ^D: folder | Space: page | 'q': quit ] "
+    if view_mode == "list":
+        bot_label = " [ ^N: file | ^D: folder | Space: page | 'q': quit ] "
+    else:
+        bot_label = " [ 'q'/Esc: back | Space: page ] "
+        
     if remaining > 0: bot_label = f" [ ↓ {remaining} more ]" + bot_label
     output.append(f"{YELLOW}─ {bot_label}{'─' * (width - len(bot_label) - 2)}{RESET}{CLEAR_LINE}")
 
@@ -123,6 +138,13 @@ def main():
     scroll = 0
     input_type = None # None, "file", or "folder"
     input_text = ""
+    view_mode = "list" # "list" or "view"
+    file_lines = []
+    
+    # Store list state to restore after viewing
+    entries_list = []
+    selection_list = 0
+    scroll_list = 0
     
     # Enter Application Cursor Mode and Hide cursor
     sys.stdout.write("\033[?1h\033[?25l")
@@ -137,13 +159,19 @@ def main():
             view_height = (rows // 2) - 2
             if view_height < 5: view_height = 5
 
-            entries = get_file_info(current_path)
+            if view_mode == "list":
+                entries = get_file_info(current_path)
+                header_path = current_path
+            else:
+                entries = file_lines
+                header_path = os.path.join(current_path, entries_list[selection_list]['name'])
+
             prompt = None
             if input_type == "file": prompt = "Create New File:"
             elif input_type == "folder": prompt = "Create New Folder:"
             
-            render(current_path, entries, selection, scroll, view_height, cols, 
-                   prompt=prompt, input_text=input_text)
+            render(header_path, entries, selection, scroll, view_height, cols, 
+                   prompt=prompt, input_text=input_text, view_mode=view_mode)
 
             key = get_key()
             
@@ -166,14 +194,21 @@ def main():
                     input_text += key
                 continue
 
-            if key == 'q':
-                # Move cursor to the bottom of the widget before exiting
-                sys.stdout.write(f"\033[{view_height + 2}B\n")
-                break
-            elif key == '\x0e': # Ctrl+N
+            if key in ['q', '\x1b']:
+                if view_mode == "view":
+                    view_mode = "list"
+                    entries = entries_list
+                    selection = selection_list
+                    scroll = scroll_list
+                    continue
+                else:
+                    # Move cursor to the bottom of the widget before exiting
+                    sys.stdout.write(f"\033[{view_height + 2}B\n")
+                    break
+            elif key == '\x0e' and view_mode == "list": # Ctrl+N
                 input_type = "file"
                 input_text = ""
-            elif key == '\x04': # Ctrl+D (Directory)
+            elif key == '\x04' and view_mode == "list": # Ctrl+D (Directory)
                 input_type = "folder"
                 input_text = ""
             elif key in ['\x1b[A', '\x1bOA', 'k']: # Up
@@ -189,11 +224,22 @@ def main():
             elif key in ['\x1b[6~', '\x1b[6;2~', '\x1b[U', '\x06', 'd', ' ', '\x1b[1;2B', '\x1b[1;3B', '\x1b\x1b[B']: # Page Down variants
                 selection = min(len(entries) - 1, selection + view_height)
             elif key in ['\r', '\n']: # Enter
-                item = entries[selection]
-                if item.get('is_dir'):
-                    current_path = os.path.abspath(os.path.join(current_path, item['name']))
-                    selection = 0
-                    scroll = 0
+                if view_mode == "list":
+                    item = entries[selection]
+                    if item.get('is_dir'):
+                        current_path = os.path.abspath(os.path.join(current_path, item['name']))
+                        selection = 0
+                        scroll = 0
+                    else:
+                        # Save list state
+                        entries_list = entries
+                        selection_list = selection
+                        scroll_list = scroll
+                        # Enter view mode
+                        file_lines = read_file_lines(os.path.join(current_path, item['name']))
+                        view_mode = "view"
+                        selection = 0
+                        scroll = 0
             
             # Auto-scroll logic
             if selection < scroll:
