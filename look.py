@@ -6,9 +6,16 @@ import pwd
 import tty
 import termios
 import select
+import re
 from datetime import datetime
 
 # --- Logic: Metadata & Files ---
+
+def strip_ansi(s):
+    return re.sub(r'\x1b\[[0-9;]*[mK]', '', s)
+
+def visible_len(s):
+    return len(strip_ansi(s))
 
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
@@ -68,22 +75,26 @@ def get_key():
     return ch
 
 def render(current_path, entries, selection, scroll, height, width, prompt=None, input_text="", view_mode="list", search_text=None):
-    output = []
-    
     # Colors
     BLUE_BG = "\033[44m\033[37m"
     BLUE = "\033[34m"
     YELLOW = "\033[33m"
     WHITE = "\033[1m"
     RESET = "\033[0m"
-    CLEAR_LINE = "\033[K"
 
-    # Border: Top
+    lines = []
+
+    # 1. Top Border
     top_label = f" {current_path} "
     if scroll > 0: top_label += f" [ ↑ {scroll} more ] "
-    output.append(f"{YELLOW}─ {top_label}{'─' * (width - len(top_label) - 2)}{RESET}{CLEAR_LINE}")
+    # Truncate path if it's too long to avoid wrapping
+    while visible_len(top_label) > width - 4:
+        top_label = "..." + top_label[-(width - 8):]
+    
+    padding = width - visible_len(top_label) - 2
+    lines.append(f"{YELLOW}─{top_label}{'─' * max(0, padding)}{RESET}")
 
-    # File List / File Content
+    # 2. Entries
     for i in range(height):
         idx = i + scroll
         if idx < len(entries):
@@ -91,34 +102,23 @@ def render(current_path, entries, selection, scroll, height, width, prompt=None,
             if view_mode == "list":
                 meta = f"{item.get('perms','')}  {item.get('author',''):>8}  {item.get('size',''):>8}  {item.get('ctime','')} | {item.get('mtime','')}"
                 name_w = width - len(meta) - 2
-                name = item['name'][:name_w].ljust(name_w)
-                line = f"{name} {meta}"
+                name = item['name'][:max(0, name_w)].ljust(max(0, name_w))
+                line_content = f"{name} {meta}"
+                color = BLUE if item.get('is_dir') else ""
             else:
                 # view_mode == "view": entries contains raw lines
-                line = str(item)[:width].ljust(width)
+                # Replace tabs with spaces and strictly truncate to avoid wrapping
+                line_content = str(item).replace('\t', '    ')[:width]
+                color = ""
             
             if idx == selection:
-                output.append(f"{BLUE_BG}{line[:width]}{RESET}{CLEAR_LINE}")
+                lines.append(f"{BLUE_BG}{line_content.ljust(width)}{RESET}")
             else:
-                color = BLUE if view_mode == "list" and item.get('is_dir') else ""
-                output.append(f"{color}{line[:width]}{RESET}{CLEAR_LINE}")
+                lines.append(f"{color}{line_content.ljust(width)}{RESET}")
         else:
-            output.append(CLEAR_LINE) # Empty space if directory/file is small
+            lines.append(" " * width)
 
-    # Overlay Dialog if prompt is active
-    if prompt:
-        dialog_w = min(40, width - 4)
-        dialog_h = 3
-        start_y = (height - dialog_h) // 2 + 1
-        start_x = (width - dialog_w) // 2
-        
-        # Draw dialog over the file list
-        output[start_y] = f"{' ' * start_x}┌{'─' * (dialog_w - 2)}┐{CLEAR_LINE}"
-        output[start_y + 1] = f"{' ' * start_x}│ {prompt[:dialog_w-4].ljust(dialog_w-4)} │{CLEAR_LINE}"
-        output[start_y + 2] = f"{' ' * start_x}│ > {input_text[:dialog_w-6].ljust(dialog_w-6)} │{CLEAR_LINE}"
-        output[start_y + 3] = f"{' ' * start_x}└{'─' * (dialog_w - 2)}┘{CLEAR_LINE}"
-
-    # Border: Bottom
+    # 3. Bottom Border
     remaining = len(entries) - (scroll + height)
     if view_mode == "list":
         if search_text is not None:
@@ -129,12 +129,32 @@ def render(current_path, entries, selection, scroll, height, width, prompt=None,
         bot_label = " [ 'q'/Esc: back | Space: page ] "
         
     if remaining > 0: bot_label = f" [ ↓ {remaining} more ]" + bot_label
-    output.append(f"{YELLOW}─ {bot_label}{'─' * (width - len(bot_label) - 2)}{RESET}{CLEAR_LINE}")
+    
+    # Use visible_len to account for ANSI codes in bot_label
+    padding = width - visible_len(bot_label) - 2
+    lines.append(f"{YELLOW}─{bot_label}{'─' * max(0, padding)}{RESET}")
 
-    # Print all at once
-    sys.stdout.write("\n".join(output))
-    # Move cursor back up to the start of the widget
-    sys.stdout.write(f"\033[{len(output) - 1}A\r")
+    # 4. Patch with Dialog if active
+    if prompt:
+        dialog_w = min(40, width - 4)
+        dialog_h = 3
+        start_y = (height - dialog_h) // 2 + 1
+        start_x = (width - dialog_w) // 2
+        
+        if 0 <= start_y < len(lines) - 4:
+            lines[start_y] = f"{' ' * start_x}┌{'─' * (dialog_w - 2)}┐".ljust(width)
+            lines[start_y + 1] = f"{' ' * start_x}│ {prompt[:dialog_w-4].ljust(dialog_w-4)} │".ljust(width)
+            lines[start_y + 2] = f"{' ' * start_x}│ > {input_text[:dialog_w-6].ljust(dialog_w-6)} │".ljust(width)
+            lines[start_y + 3] = f"{' ' * start_x}└{'─' * (dialog_w - 2)}┘".ljust(width)
+
+    # 5. Final Output
+    # Move cursor to top-left, print lines, and clear the rest of the screen
+    sys.stdout.write("\033[H")
+    for i, line in enumerate(lines):
+        sys.stdout.write(line)
+        if i < len(lines) - 1:
+            sys.stdout.write("\n")
+    sys.stdout.write("\033[J")
     sys.stdout.flush()
 
 def main():
